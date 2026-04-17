@@ -1,0 +1,1121 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>SMS Printer</title>
+  <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+  <style>
+    :root {
+      --bg: #0a0a0a;
+      --surface: #111111;
+      --surface-2: #181818;
+      --surface-3: #1e1e1e;
+      --border: #222222;
+      --border-2: #2a2a2a;
+      --green: #22c55e;
+      --green-dim: #166534;
+      --red: #ef4444;
+      --amber: #f59e0b;
+      --blue: #3b82f6;
+      --text: #e5e5e5;
+      --text-2: #aaaaaa;
+      --muted: #555555;
+      --receipt-bg: #faf9f6;
+      --receipt-border: #d4d4d4;
+      --nav-w: 220px;
+      --header-h: 60px;
+    }
+
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    html, body {
+      height: 100%;
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'Courier New', Courier, monospace;
+      overflow: hidden;
+    }
+
+    /* ── APP SHELL ── */
+    .app {
+      display: grid;
+      grid-template-columns: var(--nav-w) 1fr;
+      grid-template-rows: var(--header-h) 1fr;
+      height: 100vh;
+    }
+
+    /* ── SIDEBAR ── */
+    .sidebar {
+      grid-row: 1 / 3;
+      background: var(--surface);
+      border-right: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      padding: 0;
+      z-index: 20;
+    }
+
+    .sidebar-logo {
+      height: var(--header-h);
+      display: flex;
+      align-items: center;
+      padding: 0 20px;
+      border-bottom: 1px solid var(--border);
+      font-size: 1rem;
+      font-weight: bold;
+      letter-spacing: 0.15em;
+      color: #fff;
+      flex-shrink: 0;
+    }
+    .sidebar-logo em { color: var(--green); font-style: normal; }
+
+    .nav {
+      padding: 12px 10px;
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+
+    .nav-item {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 9px 12px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 0.78rem;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--muted);
+      transition: background 0.15s, color 0.15s;
+      user-select: none;
+      border: none;
+      background: none;
+      width: 100%;
+      text-align: left;
+    }
+    .nav-item:hover { background: var(--surface-2); color: var(--text-2); }
+    .nav-item.active { background: var(--surface-3); color: #fff; }
+    .nav-item.active .nav-dot { background: var(--green); }
+
+    .nav-icon {
+      width: 16px;
+      height: 16px;
+      flex-shrink: 0;
+      opacity: 0.7;
+    }
+    .nav-item.active .nav-icon { opacity: 1; }
+
+    .nav-dot {
+      width: 6px; height: 6px;
+      border-radius: 50%;
+      background: var(--border-2);
+      margin-left: auto;
+      flex-shrink: 0;
+      transition: background 0.3s;
+    }
+
+    /* ── PRINT TOGGLE in sidebar ── */
+    .sidebar-toggle {
+      padding: 16px 16px 20px;
+      border-top: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+
+    .toggle-label-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 10px;
+    }
+    .toggle-title {
+      font-size: 0.68rem;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: var(--muted);
+    }
+    .toggle-state {
+      font-size: 0.68rem;
+      letter-spacing: 0.1em;
+      font-weight: bold;
+      color: var(--green);
+      transition: color 0.3s;
+    }
+    .toggle-state.off { color: var(--muted); }
+
+    .big-toggle {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      cursor: pointer;
+      user-select: none;
+    }
+
+    .switch {
+      position: relative;
+      width: 52px;
+      height: 28px;
+      flex-shrink: 0;
+    }
+    .switch input { display: none; }
+    .switch-track {
+      position: absolute;
+      inset: 0;
+      background: var(--surface-3);
+      border: 1.5px solid var(--border-2);
+      border-radius: 99px;
+      transition: background 0.3s, border-color 0.3s;
+    }
+    .switch input:checked + .switch-track {
+      background: var(--green-dim);
+      border-color: var(--green);
+    }
+    .switch-thumb {
+      position: absolute;
+      top: 3px; left: 3px;
+      width: 20px; height: 20px;
+      background: var(--muted);
+      border-radius: 50%;
+      transition: transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1), background 0.3s;
+      pointer-events: none;
+    }
+    .switch input:checked ~ .switch-thumb {
+      transform: translateX(24px);
+      background: var(--green);
+    }
+
+    .toggle-desc {
+      font-size: 0.72rem;
+      color: var(--text-2);
+      line-height: 1.4;
+    }
+    .toggle-desc small {
+      display: block;
+      font-size: 0.62rem;
+      color: var(--muted);
+      margin-top: 2px;
+    }
+
+    /* ── HEADER ── */
+    .header {
+      grid-column: 2;
+      height: var(--header-h);
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 24px;
+    }
+
+    .header-title {
+      font-size: 0.75rem;
+      letter-spacing: 0.15em;
+      text-transform: uppercase;
+      color: var(--text-2);
+    }
+
+    .header-right {
+      display: flex;
+      align-items: center;
+      gap: 20px;
+    }
+
+    /* Printer widget */
+    .printer-widget {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .printer-icon {
+      position: relative;
+      width: 36px;
+      height: 28px;
+      flex-shrink: 0;
+    }
+    .printer-paper {
+      position: absolute;
+      top: 0; left: 50%;
+      transform: translateX(-50%);
+      width: 16px; height: 18px;
+      background: #faf9f6;
+      border-radius: 1px;
+      opacity: 0;
+      z-index: 1;
+    }
+    .printer-paper::after {
+      content: '';
+      display: block;
+      margin: 3px auto 0;
+      width: 9px; height: 1px;
+      background: #ccc;
+      box-shadow: 0 3px 0 #ccc, 0 6px 0 #ccc;
+    }
+    .printer-body {
+      position: absolute;
+      bottom: 0; left: 4px; right: 4px;
+      height: 18px;
+      background: var(--surface-2);
+      border: 1.5px solid #333;
+      border-radius: 3px;
+      z-index: 2;
+    }
+    .printer-slot {
+      position: absolute;
+      top: -2px; left: 50%;
+      transform: translateX(-50%);
+      width: 18px; height: 4px;
+      background: var(--bg);
+      border-radius: 1px;
+    }
+    .printer-light {
+      position: absolute;
+      bottom: 4px; right: 5px;
+      width: 4px; height: 4px;
+      border-radius: 50%;
+      background: var(--green);
+      transition: background 0.3s;
+    }
+    .printer-status-text {
+      font-size: 0.65rem;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: var(--muted);
+      transition: color 0.3s;
+    }
+
+    .printer-widget.printing .printer-light { background: var(--amber); }
+    .printer-widget.printing .printer-status-text { color: var(--amber); }
+    .printer-widget.printing .printer-paper {
+      opacity: 1;
+      animation: feed-paper 0.9s ease-out forwards;
+    }
+    @keyframes feed-paper {
+      0%   { top: 10px; opacity: 0; }
+      15%  { opacity: 1; }
+      100% { top: -10px; opacity: 1; }
+    }
+    .printer-widget.done .printer-light { background: var(--green); }
+    .printer-widget.done .printer-status-text { color: var(--green); }
+    .printer-widget.error .printer-light { background: var(--red); }
+    .printer-widget.error .printer-status-text { color: var(--red); }
+    .printer-widget.paused .printer-light { background: var(--muted); }
+    .printer-widget.paused .printer-status-text { color: var(--muted); }
+
+    /* Live dot */
+    .live-status {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      font-size: 0.65rem;
+      color: var(--muted);
+    }
+    .live-dot {
+      width: 7px; height: 7px;
+      border-radius: 50%;
+      background: var(--red);
+      transition: background 0.4s;
+    }
+    .live-dot.on {
+      background: var(--green);
+      animation: blink 2s ease-in-out infinite;
+    }
+    @keyframes blink {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.3; }
+    }
+
+    /* ── CONTENT AREA ── */
+    .content {
+      grid-column: 2;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* ── VIEWS ── */
+    .view { display: none; flex: 1; overflow: hidden; }
+    .view.active { display: flex; }
+
+    /* ── DASHBOARD VIEW ── */
+    #view-dashboard {
+      flex-direction: column;
+    }
+
+    .stats-bar {
+      display: flex;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+    .stat {
+      flex: 1;
+      padding: 10px 24px;
+      border-right: 1px solid var(--border);
+    }
+    .stat:last-child { border-right: none; }
+    .stat-value {
+      font-size: 1.5rem;
+      font-weight: bold;
+      color: #fff;
+      font-variant-numeric: tabular-nums;
+    }
+    .stat-label {
+      font-size: 0.6rem;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.12em;
+    }
+
+    .dashboard-main {
+      display: grid;
+      grid-template-columns: 1fr 360px;
+      flex: 1;
+      overflow: hidden;
+    }
+
+    /* Feed */
+    .feed-panel {
+      overflow-y: auto;
+      padding: 18px 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      border-right: 1px solid var(--border);
+      scrollbar-width: thin;
+      scrollbar-color: #222 transparent;
+    }
+    .feed-panel::-webkit-scrollbar { width: 3px; }
+    .feed-panel::-webkit-scrollbar-thumb { background: #222; border-radius: 2px; }
+
+    .empty-state {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      height: 100%;
+      gap: 10px;
+      color: #252525;
+      font-size: 0.72rem;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+    }
+
+    /* Receipt */
+    .receipt {
+      background: var(--receipt-bg);
+      color: #1a1a1a;
+      border-radius: 2px;
+      animation: slip-in 0.28s cubic-bezier(0.22, 1, 0.36, 1);
+      position: relative;
+      box-shadow: 0 4px 20px rgba(0,0,0,0.45);
+    }
+    @keyframes slip-in {
+      from { opacity: 0; transform: translateY(-12px) scale(0.97); }
+      to   { opacity: 1; transform: translateY(0) scale(1); }
+    }
+    .receipt.flash::after {
+      content: '';
+      position: absolute;
+      inset: -3px;
+      border-radius: 4px;
+      border: 2px solid var(--green);
+      animation: flash-ring 0.65s ease forwards;
+      pointer-events: none;
+      z-index: 10;
+    }
+    .receipt.flash.error::after  { border-color: var(--red); }
+    .receipt.flash.skipped::after { border-color: var(--blue); }
+    @keyframes flash-ring {
+      0%   { opacity: 1; transform: scale(1); }
+      100% { opacity: 0; transform: scale(1.04); }
+    }
+
+    .receipt-top {
+      height: 11px;
+      background-image: radial-gradient(circle at 8px -2px, var(--bg) 7px, var(--receipt-bg) 7px);
+      background-size: 16px 11px;
+      background-repeat: repeat-x;
+    }
+    .receipt-bottom {
+      height: 11px;
+      background-image: radial-gradient(circle at 8px 13px, var(--bg) 7px, var(--receipt-bg) 7px);
+      background-size: 16px 11px;
+      background-repeat: repeat-x;
+    }
+    .receipt-inner {
+      padding: 9px 15px 11px;
+      border-left: 1px dashed var(--receipt-border);
+      border-right: 1px dashed var(--receipt-border);
+    }
+    .receipt-header {
+      text-align: center;
+      border-bottom: 1px dashed var(--receipt-border);
+      padding-bottom: 7px;
+      margin-bottom: 7px;
+    }
+    .receipt-title {
+      font-size: 0.6rem;
+      letter-spacing: 0.2em;
+      text-transform: uppercase;
+      color: #999;
+    }
+    .receipt-from {
+      font-size: 0.95rem;
+      font-weight: bold;
+      margin-top: 2px;
+      color: #111;
+    }
+    .receipt-meta {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 0.62rem;
+      color: #999;
+      margin-bottom: 7px;
+    }
+    .badge {
+      font-size: 0.55rem;
+      padding: 2px 7px;
+      border-radius: 99px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      font-weight: bold;
+    }
+    .badge.printed { background: #dcfce7; color: #166534; border: 1px solid #bbf7d0; }
+    .badge.error   { background: #fee2e2; color: #991b1b; border: 1px solid #fecaca; }
+    .badge.skipped { background: #eff6ff; color: #1d4ed8; border: 1px solid #bfdbfe; }
+    .receipt-body {
+      font-size: 0.85rem;
+      line-height: 1.6;
+      color: #222;
+      white-space: pre-wrap;
+      word-break: break-word;
+      border-top: 1px dashed var(--receipt-border);
+      padding-top: 7px;
+    }
+
+    /* Spotlight */
+    .spotlight-panel {
+      background: var(--surface);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+    .spotlight-head {
+      padding: 12px 18px;
+      border-bottom: 1px solid var(--border);
+      font-size: 0.6rem;
+      text-transform: uppercase;
+      letter-spacing: 0.15em;
+      color: var(--muted);
+    }
+    .spotlight-body-wrap {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 24px 20px;
+      text-align: center;
+    }
+    .spot-empty {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 8px;
+      color: #252525;
+      font-size: 0.7rem;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+    }
+    .spot-from  { font-size: 0.65rem; letter-spacing: 0.2em; text-transform: uppercase; color: var(--green); margin-bottom: 6px; }
+    .spot-num   { font-size: 1.7rem; font-weight: bold; color: #fff; letter-spacing: 0.05em; margin-bottom: 18px; }
+    .spot-hr    { width: 28px; height: 1px; background: var(--border); margin: 0 auto 18px; }
+    .spot-msg   { font-size: 1.05rem; color: var(--text); line-height: 1.75; white-space: pre-wrap; word-break: break-word; }
+    .spot-time  { margin-top: 18px; font-size: 0.65rem; color: var(--muted); }
+    .spotlight-bar-wrap { height: 2px; background: var(--border); flex-shrink: 0; }
+    .spotlight-bar { height: 100%; background: var(--green); width: 100%; transform-origin: left; }
+    .spotlight-bar.running { animation: deplete 30s linear forwards; }
+    @keyframes deplete { from { width: 100%; } to { width: 0%; } }
+
+    /* ── SETTINGS VIEW ── */
+    #view-settings {
+      flex-direction: column;
+      overflow-y: auto;
+      padding: 28px 32px;
+      scrollbar-width: thin;
+      scrollbar-color: #222 transparent;
+    }
+
+    .settings-section {
+      margin-bottom: 32px;
+      max-width: 560px;
+    }
+    .settings-section-title {
+      font-size: 0.65rem;
+      text-transform: uppercase;
+      letter-spacing: 0.15em;
+      color: var(--muted);
+      margin-bottom: 14px;
+      padding-bottom: 8px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .setting-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 20px;
+      padding: 14px 0;
+      border-bottom: 1px solid var(--border);
+    }
+    .setting-row:last-child { border-bottom: none; }
+    .setting-info { flex: 1; }
+    .setting-name {
+      font-size: 0.82rem;
+      color: var(--text);
+      margin-bottom: 3px;
+    }
+    .setting-desc {
+      font-size: 0.68rem;
+      color: var(--muted);
+      line-height: 1.45;
+    }
+
+    /* Inline toggle (reuse switch styles) */
+    .setting-toggle { flex-shrink: 0; }
+
+    .setting-value {
+      font-size: 0.78rem;
+      color: var(--text-2);
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 5px 10px;
+      letter-spacing: 0.05em;
+    }
+
+    .btn {
+      font-family: inherit;
+      font-size: 0.72rem;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      padding: 7px 16px;
+      border-radius: 5px;
+      border: 1px solid var(--border-2);
+      background: var(--surface-2);
+      color: var(--text-2);
+      cursor: pointer;
+      transition: background 0.15s, color 0.15s, border-color 0.15s;
+    }
+    .btn:hover { background: var(--surface-3); color: #fff; border-color: var(--border-2); }
+    .btn.danger { border-color: #7f1d1d; color: var(--red); }
+    .btn.danger:hover { background: #2d0f0f; }
+
+    /* Keyboard hint */
+    .kbd {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      font-family: inherit;
+      font-size: 0.6rem;
+      background: var(--surface-3);
+      border: 1px solid var(--border-2);
+      border-radius: 3px;
+      padding: 1px 5px;
+      color: var(--muted);
+    }
+
+    /* ── SHUTDOWN BUTTON ── */
+    .shutdown-btn {
+      width: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      padding: 9px;
+      border-radius: 6px;
+      border: 1px solid #3f1010;
+      background: #1a0808;
+      color: #f87171;
+      font-family: inherit;
+      font-size: 0.72rem;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      cursor: pointer;
+      transition: background 0.15s, border-color 0.15s, color 0.15s;
+    }
+    .shutdown-btn:hover { background: #2d0f0f; border-color: var(--red); color: #fff; }
+    .shutdown-btn.confirm { background: var(--red); border-color: var(--red); color: #fff; animation: pulse-red 0.6s ease; }
+    @keyframes pulse-red {
+      0%, 100% { transform: scale(1); }
+      50%       { transform: scale(1.03); }
+    }
+
+    @media (max-width: 700px) {
+      .app { grid-template-columns: 1fr; }
+      .sidebar { display: none; }
+      .dashboard-main { grid-template-columns: 1fr; }
+      .spotlight-panel { display: none; }
+    }
+  </style>
+</head>
+<body>
+<div class="app">
+
+  <!-- ── SIDEBAR ── -->
+  <aside class="sidebar">
+    <div class="sidebar-logo">SMS<em>PRINTER</em></div>
+
+    <nav class="nav">
+      <button class="nav-item active" data-view="dashboard" id="nav-dashboard">
+        <svg class="nav-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4">
+          <rect x="1" y="1" width="6" height="6" rx="1"/>
+          <rect x="9" y="1" width="6" height="6" rx="1"/>
+          <rect x="1" y="9" width="6" height="6" rx="1"/>
+          <rect x="9" y="9" width="6" height="6" rx="1"/>
+        </svg>
+        Dashboard
+        <span class="nav-dot" id="nav-dot-dashboard"></span>
+      </button>
+
+      <button class="nav-item" data-view="settings" id="nav-settings">
+        <svg class="nav-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4">
+          <circle cx="8" cy="8" r="2.5"/>
+          <path d="M8 1v2M8 13v2M1 8h2M13 8h2M3.05 3.05l1.41 1.41M11.54 11.54l1.41 1.41M3.05 12.95l1.41-1.41M11.54 4.46l1.41-1.41"/>
+        </svg>
+        Settings
+        <span class="nav-dot"></span>
+      </button>
+    </nav>
+
+    <!-- Shutdown -->
+    <div style="padding: 0 10px 10px;">
+      <button class="shutdown-btn" id="btn-shutdown">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M18.36 6.64a9 9 0 1 1-12.73 0"/><line x1="12" y1="2" x2="12" y2="12"/>
+        </svg>
+        <span id="shutdown-label">Shut Down</span>
+      </button>
+    </div>
+
+    <!-- Print toggle -->
+    <div class="sidebar-toggle">
+      <div class="toggle-label-row">
+        <span class="toggle-title">Printing</span>
+        <span class="toggle-state" id="toggle-state-text">ON</span>
+      </div>
+      <label class="big-toggle" for="print-toggle">
+        <div class="switch">
+          <input type="checkbox" id="print-toggle" checked>
+          <span class="switch-track"></span>
+          <span class="switch-thumb"></span>
+        </div>
+        <div class="toggle-desc">
+          Auto-print incoming SMS
+          <small>Shortcut: <kbd class="kbd">Space</kbd></small>
+        </div>
+      </label>
+    </div>
+  </aside>
+
+  <!-- ── HEADER ── -->
+  <header class="header">
+    <div class="header-title" id="header-title">Dashboard</div>
+    <div class="header-right">
+      <div class="printer-widget" id="printer-widget">
+        <div class="printer-icon">
+          <div class="printer-paper"></div>
+          <div class="printer-body">
+            <div class="printer-slot"></div>
+            <div class="printer-light"></div>
+          </div>
+        </div>
+        <span class="printer-status-text" id="printer-status-text">READY</span>
+      </div>
+      <div class="live-status">
+        <div class="live-dot" id="live-dot"></div>
+        <span id="live-text">Connecting...</span>
+      </div>
+    </div>
+  </header>
+
+  <!-- ── CONTENT ── -->
+  <div class="content">
+
+    <!-- Dashboard view -->
+    <div class="view active" id="view-dashboard">
+      <div class="stats-bar">
+        <div class="stat">
+          <div class="stat-value" id="count-total">0</div>
+          <div class="stat-label">Total</div>
+        </div>
+        <div class="stat">
+          <div class="stat-value" id="count-printed">0</div>
+          <div class="stat-label">Printed</div>
+        </div>
+        <div class="stat">
+          <div class="stat-value" id="count-skipped">0</div>
+          <div class="stat-label">Skipped</div>
+        </div>
+        <div class="stat">
+          <div class="stat-value" id="count-errors">0</div>
+          <div class="stat-label">Errors</div>
+        </div>
+      </div>
+
+      <div class="dashboard-main">
+        <div class="feed-panel" id="feed">
+          <div class="empty-state" id="empty-state">
+            <svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+              <path d="M6 9V2h12v7"/>
+              <rect x="2" y="9" width="20" height="8" rx="1"/>
+              <path d="M6 18v4h12v-4"/>
+              <circle cx="18" cy="13" r="1" fill="currentColor"/>
+            </svg>
+            <span>Waiting for messages</span>
+          </div>
+        </div>
+
+        <div class="spotlight-panel">
+          <div class="spotlight-head">Last Message</div>
+          <div class="spotlight-body-wrap" id="spotlight-content">
+            <div class="spot-empty">
+              <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" opacity="0.25">
+                <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+              </svg>
+              <span>No messages yet</span>
+            </div>
+          </div>
+          <div class="spotlight-bar-wrap">
+            <div class="spotlight-bar" id="spotlight-bar"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Settings view -->
+    <div class="view" id="view-settings">
+
+      <div class="settings-section">
+        <div class="settings-section-title">Printer</div>
+
+        <div class="setting-row">
+          <div class="setting-info">
+            <div class="setting-name">Auto-Print</div>
+            <div class="setting-desc">When enabled, incoming SMS messages are automatically sent to the printer.</div>
+          </div>
+          <div class="setting-toggle">
+            <div class="switch">
+              <input type="checkbox" id="print-toggle-settings" checked>
+              <span class="switch-track"></span>
+              <span class="switch-thumb"></span>
+            </div>
+          </div>
+        </div>
+
+        <div class="setting-row">
+          <div class="setting-info">
+            <div class="setting-name">Printer Name</div>
+            <div class="setting-desc">The Windows printer device name used for RAW output.</div>
+          </div>
+          <span class="setting-value">POS-80</span>
+        </div>
+
+        <div class="setting-row">
+          <div class="setting-info">
+            <div class="setting-name">Clear Feed</div>
+            <div class="setting-desc">Remove all messages from the dashboard feed. Does not affect the printer.</div>
+          </div>
+          <button class="btn danger" id="btn-clear">Clear</button>
+        </div>
+      </div>
+
+      <div class="settings-section">
+        <div class="settings-section-title">Notifications</div>
+
+        <div class="setting-row">
+          <div class="setting-info">
+            <div class="setting-name">Sound</div>
+            <div class="setting-desc">Play a tone when a message arrives. Success plays a chime; errors play a low buzz.</div>
+          </div>
+          <div class="setting-toggle">
+            <div class="switch">
+              <input type="checkbox" id="sound-toggle" checked>
+              <span class="switch-track"></span>
+              <span class="switch-thumb"></span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="settings-section">
+        <div class="settings-section-title">Keyboard Shortcuts</div>
+        <div class="setting-row">
+          <div class="setting-info">
+            <div class="setting-name">Toggle Printing</div>
+          </div>
+          <kbd class="kbd">Space</kbd>
+        </div>
+        <div class="setting-row">
+          <div class="setting-info">
+            <div class="setting-name">Go to Dashboard</div>
+          </div>
+          <kbd class="kbd">1</kbd>
+        </div>
+        <div class="setting-row">
+          <div class="setting-info">
+            <div class="setting-name">Go to Settings</div>
+          </div>
+          <kbd class="kbd">2</kbd>
+        </div>
+      </div>
+
+    </div><!-- /settings -->
+  </div><!-- /content -->
+</div><!-- /app -->
+
+<script>
+  const socket = io();
+  let total = 0, printed = 0, skipped = 0, errors = 0;
+  let spotlightTimer = null;
+  let soundEnabled = true;
+  let printingEnabled = true;
+
+  // ── Socket ─────────────────────────────────────────────────
+  socket.on('connect', () => {
+    document.getElementById('live-dot').classList.add('on');
+    document.getElementById('live-text').textContent = 'Live';
+  });
+  socket.on('disconnect', () => {
+    document.getElementById('live-dot').classList.remove('on');
+    document.getElementById('live-text').textContent = 'Disconnected';
+  });
+
+  socket.on('printing_state', ({ enabled }) => {
+    setPrintingUI(enabled);
+  });
+
+  socket.on('new_message', (msg) => {
+    if (soundEnabled) playDing(msg.status === 'error');
+    if (msg.status === 'printed') animatePrinter(msg.status);
+    addCard(msg);
+    updateSpotlight(msg);
+    incrementStat('count-total', ++total);
+    if (msg.status === 'printed')      incrementStat('count-printed', ++printed);
+    else if (msg.status === 'skipped') incrementStat('count-skipped', ++skipped);
+    else                               incrementStat('count-errors',  ++errors);
+  });
+
+  // ── Navigation ─────────────────────────────────────────────
+  const views = { dashboard: 'Dashboard', settings: 'Settings' };
+
+  document.querySelectorAll('.nav-item').forEach(btn => {
+    btn.addEventListener('click', () => switchView(btn.dataset.view));
+  });
+
+  function switchView(name) {
+    document.querySelectorAll('.nav-item').forEach(b => b.classList.toggle('active', b.dataset.view === name));
+    document.querySelectorAll('.view').forEach(v => v.classList.toggle('active', v.id === `view-${name}`));
+    document.getElementById('header-title').textContent = views[name] || name;
+  }
+
+  // ── Print toggle ───────────────────────────────────────────
+  const toggleMain     = document.getElementById('print-toggle');
+  const toggleSettings = document.getElementById('print-toggle-settings');
+
+  function setPrintingUI(enabled) {
+    printingEnabled = enabled;
+    toggleMain.checked     = enabled;
+    toggleSettings.checked = enabled;
+    const stateText = document.getElementById('toggle-state-text');
+    stateText.textContent = enabled ? 'ON' : 'OFF';
+    stateText.classList.toggle('off', !enabled);
+    const pw = document.getElementById('printer-widget');
+    if (!enabled) {
+      pw.className = 'printer-widget paused';
+      document.getElementById('printer-status-text').textContent = 'PAUSED';
+    } else {
+      pw.className = 'printer-widget';
+      document.getElementById('printer-status-text').textContent = 'READY';
+    }
+  }
+
+  function emitToggle(enabled) {
+    socket.emit('set_printing', { enabled });
+  }
+
+  toggleMain.addEventListener('change',     () => emitToggle(toggleMain.checked));
+  toggleSettings.addEventListener('change', () => emitToggle(toggleSettings.checked));
+
+  // ── Sound toggle ───────────────────────────────────────────
+  document.getElementById('sound-toggle').addEventListener('change', e => {
+    soundEnabled = e.target.checked;
+  });
+
+  // ── Clear feed ─────────────────────────────────────────────
+  document.getElementById('btn-clear').addEventListener('click', () => {
+    const feed = document.getElementById('feed');
+    feed.innerHTML = `
+      <div class="empty-state" id="empty-state">
+        <svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+          <path d="M6 9V2h12v7"/>
+          <rect x="2" y="9" width="20" height="8" rx="1"/>
+          <path d="M6 18v4h12v-4"/>
+          <circle cx="18" cy="13" r="1" fill="currentColor"/>
+        </svg>
+        <span>Waiting for messages</span>
+      </div>`;
+    total = printed = skipped = errors = 0;
+    ['count-total','count-printed','count-skipped','count-errors'].forEach(id => {
+      document.getElementById(id).textContent = '0';
+    });
+  });
+
+  // ── Keyboard shortcuts ─────────────────────────────────────
+  document.addEventListener('keydown', e => {
+    if (e.target.tagName === 'INPUT') return;
+    if (e.code === 'Space') { e.preventDefault(); emitToggle(!printingEnabled); }
+    if (e.key === '1') switchView('dashboard');
+    if (e.key === '2') switchView('settings');
+  });
+
+  // ── Receipt card ───────────────────────────────────────────
+  function addCard(msg) {
+    const empty = document.getElementById('empty-state');
+    if (empty) empty.remove();
+    const card = document.createElement('div');
+    card.className = `receipt flash ${msg.status}`;
+    card.innerHTML = `
+      <div class="receipt-top"></div>
+      <div class="receipt-inner">
+        <div class="receipt-header">
+          <div class="receipt-title">Incoming SMS</div>
+          <div class="receipt-from">${esc(msg.from)}</div>
+        </div>
+        <div class="receipt-meta">
+          <span>${esc(msg.time)}</span>
+          <span class="badge ${msg.status}">${msg.status}</span>
+        </div>
+        <div class="receipt-body">${esc(msg.body)}</div>
+      </div>
+      <div class="receipt-bottom"></div>
+    `;
+    document.getElementById('feed').prepend(card);
+    setTimeout(() => card.classList.remove('flash'), 700);
+  }
+
+  // ── Spotlight ──────────────────────────────────────────────
+  function updateSpotlight(msg) {
+    document.getElementById('spotlight-content').innerHTML = `
+      <div class="spot-from">From</div>
+      <div class="spot-num">${esc(msg.from)}</div>
+      <div class="spot-hr"></div>
+      <div class="spot-msg">${esc(msg.body)}</div>
+      <div class="spot-time">${esc(msg.time)}</div>
+    `;
+    const bar = document.getElementById('spotlight-bar');
+    bar.classList.remove('running');
+    void bar.offsetWidth;
+    bar.classList.add('running');
+    clearTimeout(spotlightTimer);
+    spotlightTimer = setTimeout(() => {
+      document.getElementById('spotlight-content').innerHTML = `
+        <div class="spot-empty">
+          <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" opacity="0.25">
+            <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+          </svg>
+          <span>No messages yet</span>
+        </div>`;
+    }, 30000);
+  }
+
+  // ── Printer animation ──────────────────────────────────────
+  function animatePrinter(status) {
+    if (!printingEnabled) return;
+    const w = document.getElementById('printer-widget');
+    const t = document.getElementById('printer-status-text');
+    w.className = 'printer-widget printing';
+    t.textContent = 'PRINTING';
+    setTimeout(() => {
+      w.className = 'printer-widget ' + (status === 'error' ? 'error' : 'done');
+      t.textContent = status === 'error' ? 'ERROR' : 'DONE';
+    }, 950);
+    setTimeout(() => {
+      w.className = 'printer-widget';
+      t.textContent = 'READY';
+    }, 2800);
+  }
+
+  // ── Odometer ───────────────────────────────────────────────
+  function incrementStat(id, target) {
+    const el = document.getElementById(id);
+    const start = parseInt(el.textContent) || 0;
+    const t0 = performance.now(), dur = 350;
+    function tick(now) {
+      const p = Math.min((now - t0) / dur, 1);
+      el.textContent = Math.round(start + (target - start) * (1 - Math.pow(1 - p, 3)));
+      if (p < 1) requestAnimationFrame(tick);
+    }
+    requestAnimationFrame(tick);
+  }
+
+  // ── Sound ──────────────────────────────────────────────────
+  function playDing(isError = false) {
+    try {
+      const ctx = new (window.AudioContext || window.webkitAudioContext)();
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      if (isError) {
+        osc.type = 'sawtooth';
+        osc.frequency.setValueAtTime(220, ctx.currentTime);
+        osc.frequency.exponentialRampToValueAtTime(80, ctx.currentTime + 0.35);
+      } else {
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(880, ctx.currentTime);
+        osc.frequency.exponentialRampToValueAtTime(1100, ctx.currentTime + 0.08);
+        osc.frequency.exponentialRampToValueAtTime(880, ctx.currentTime + 0.22);
+      }
+      gain.gain.setValueAtTime(0.2, ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.45);
+      osc.start(ctx.currentTime);
+      osc.stop(ctx.currentTime + 0.45);
+    } catch(e) {}
+  }
+
+  // ── Shutdown ───────────────────────────────────────────────
+  let shutdownArmed = false;
+  let shutdownTimer = null;
+
+  document.getElementById('btn-shutdown').addEventListener('click', () => {
+    if (!shutdownArmed) {
+      shutdownArmed = true;
+      const btn = document.getElementById('btn-shutdown');
+      btn.classList.add('confirm');
+      document.getElementById('shutdown-label').textContent = 'Confirm?';
+      shutdownTimer = setTimeout(() => {
+        shutdownArmed = false;
+        btn.classList.remove('confirm');
+        document.getElementById('shutdown-label').textContent = 'Shut Down';
+      }, 3000);
+      return;
+    }
+    clearTimeout(shutdownTimer);
+    document.getElementById('shutdown-label').textContent = 'Shutting down...';
+    fetch('/shutdown', { method: 'POST' }).catch(() => {}).finally(() => window.close());
+  });
+
+  // ── Helpers ────────────────────────────────────────────────
+  function esc(str) {
+    return String(str)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  }
+</script>
+</body>
+</html>

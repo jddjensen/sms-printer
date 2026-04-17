@@ -15,4 +15,6 @@ echo Configuring Twilio webhook...
 %PYTHON% setup_webhook.py
 
 echo Starting SMS printer server...
+timeout /t 1 /nobreak >nul
+start "" http://localhost:5000
 %PYTHON% app.py

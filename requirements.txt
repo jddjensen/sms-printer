@@ -1,4 +1,5 @@
 flask
+flask-socketio
 twilio
 python-escpos
 pywin32
