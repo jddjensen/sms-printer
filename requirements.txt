@@ -1,0 +1,4 @@
+flask
+twilio
+python-escpos
+pywin32
