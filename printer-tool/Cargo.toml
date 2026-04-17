@@ -1,0 +1,19 @@
+[package]
+name = "printer-tool"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+eframe = "0.29"
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.58", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Printing",
+] }
+
+[profile.release]
+opt-level = "z"
+lto = true
+strip = true
