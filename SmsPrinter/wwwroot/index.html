@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>SMS Printer</title>
-  <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@microsoft/signalr@latest/dist/browser/signalr.min.js"></script>
   <style>
     :root {
       --bg: #0a0a0a;
@@ -633,7 +633,6 @@
       line-height: 1.45;
     }
 
-    /* Inline toggle (reuse switch styles) */
     .setting-toggle { flex-shrink: 0; }
 
     .setting-value {
@@ -663,7 +662,6 @@
     .btn.danger { border-color: #7f1d1d; color: var(--red); }
     .btn.danger:hover { background: #2d0f0f; }
 
-    /* Keyboard hint */
     .kbd {
       display: inline-flex;
       align-items: center;
@@ -721,7 +719,6 @@
       color: var(--muted);
       white-space: nowrap;
       flex-shrink: 0;
-      writing-mode: horizontal-tb;
     }
     #chart-canvas {
       flex: 1;
@@ -978,27 +975,30 @@
 </div><!-- /app -->
 
 <script>
-  const socket = io();
+  const connection = new signalR.HubConnectionBuilder()
+    .withUrl("/printerHub")
+    .withAutomaticReconnect()
+    .build();
+
   let total = 0, printed = 0, skipped = 0, errors = 0;
   let spotlightTimer = null;
   let soundEnabled = true;
   let printingEnabled = true;
 
-  // ── Socket ─────────────────────────────────────────────────
-  socket.on('connect', () => {
-    document.getElementById('live-dot').classList.add('on');
-    document.getElementById('live-text').textContent = 'Live';
-  });
-  socket.on('disconnect', () => {
-    document.getElementById('live-dot').classList.remove('on');
-    document.getElementById('live-text').textContent = 'Disconnected';
-  });
+  // ── Connection state ───────────────────────────────────────
+  function setConnected(on) {
+    document.getElementById('live-dot').classList.toggle('on', on);
+    document.getElementById('live-text').textContent = on ? 'Live' : 'Disconnected';
+  }
 
-  socket.on('printing_state', ({ enabled }) => {
-    setPrintingUI(enabled);
-  });
+  connection.onreconnecting(() => setConnected(false));
+  connection.onreconnected(() => setConnected(true));
+  connection.onclose(() => setConnected(false));
 
-  socket.on('new_message', (msg) => {
+  // ── Hub events ─────────────────────────────────────────────
+  connection.on('PrintingState', ({ enabled }) => setPrintingUI(enabled));
+
+  connection.on('NewMessage', (msg) => {
     if (soundEnabled) playDing(msg.status === 'error');
     if (msg.status === 'printed') animatePrinter(msg.status);
     addCard(msg);
@@ -1045,7 +1045,7 @@
   }
 
   function emitToggle(enabled) {
-    socket.emit('set_printing', { enabled });
+    connection.invoke('SetPrinting', enabled).catch(console.error);
   }
 
   toggleMain.addEventListener('change',     () => emitToggle(toggleMain.checked));
@@ -1083,7 +1083,13 @@
   // ── Keyboard shortcuts ─────────────────────────────────────
   document.addEventListener('keydown', e => {
     if (e.target.tagName === 'INPUT') {
-      if (e.key === 'Escape') { e.target.blur(); searchQuery = ''; filterFeed(); document.getElementById('search-input').value = ''; document.getElementById('search-count').textContent = ''; }
+      if (e.key === 'Escape') {
+        e.target.blur();
+        searchQuery = '';
+        filterFeed();
+        document.getElementById('search-input').value = '';
+        document.getElementById('search-count').textContent = '';
+      }
       return;
     }
     if (e.code === 'Space') { e.preventDefault(); emitToggle(!printingEnabled); }
@@ -1328,6 +1334,11 @@
       .replace(/&/g, '&amp;').replace(/</g, '&lt;')
       .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
   }
+
+  // ── Start connection ───────────────────────────────────────
+  connection.start()
+    .then(() => setConnected(true))
+    .catch(err => { console.error(err); setConnected(false); });
 </script>
 </body>
 </html>
