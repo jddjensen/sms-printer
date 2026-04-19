@@ -13,7 +13,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("SmsPrinter")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+f8575db6672dad8c38b56868efa568e2d106225c")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+b6a69c5fd570400be7fd11b05e582c7a99f373c7")]
 [assembly: System.Reflection.AssemblyProductAttribute("SmsPrinter")]
 [assembly: System.Reflection.AssemblyTitleAttribute("SmsPrinter")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]
