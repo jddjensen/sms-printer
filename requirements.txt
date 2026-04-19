@@ -3,3 +3,4 @@ flask-socketio
 twilio
 python-escpos
 pywin32
+requests
