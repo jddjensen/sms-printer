@@ -20,14 +20,14 @@ echo ">> Project directory:   $INSTALL_DIR"
 echo ">> Installing apt packages"
 apt-get update
 apt-get install -y \
-    python3 python3-venv python3-pip \
-    libusb-1.0-0 libjpeg-dev zlib1g-dev \
-    curl unzip usbutils
+    python3 python3-venv python3-pip python3-dev \
+    libusb-1.0-0 libjpeg-dev zlib1g-dev build-essential \
+    curl unzip usbutils ca-certificates
 
 # --- Python virtualenv -------------------------------------------------------
 echo ">> Building Python virtualenv"
 sudo -u "$RUN_USER" python3 -m venv "$INSTALL_DIR/venv"
-sudo -u "$RUN_USER" "$INSTALL_DIR/venv/bin/pip" install --upgrade pip
+sudo -u "$RUN_USER" "$INSTALL_DIR/venv/bin/pip" install --upgrade pip wheel
 sudo -u "$RUN_USER" "$INSTALL_DIR/venv/bin/pip" install -r "$INSTALL_DIR/requirements.txt"
 
 # --- ngrok (ARM64) -----------------------------------------------------------
@@ -43,7 +43,9 @@ else
     echo ">> ngrok already installed: $(command -v ngrok)"
 fi
 
-# --- ngrok authtoken ---------------------------------------------------------
+# --- ngrok authtoken + wrapper ------------------------------------------------
+chmod +x "$INSTALL_DIR/deploy/ngrok-run.sh"
+
 if [[ -f "$INSTALL_DIR/.env" ]]; then
     # shellcheck disable=SC1091
     set -a; source "$INSTALL_DIR/.env"; set +a
@@ -66,6 +68,19 @@ install -m 0644 "$INSTALL_DIR/deploy/99-escpos-printer.rules" /etc/udev/rules.d/
 udevadm control --reload-rules
 udevadm trigger
 
+# --- journald log caps (protect SD card) ------------------------------------
+echo ">> Configuring journald log retention caps"
+mkdir -p /etc/systemd/journald.conf.d
+install -m 0644 "$INSTALL_DIR/deploy/journald-sms-printer.conf" \
+    /etc/systemd/journald.conf.d/99-sms-printer.conf
+systemctl restart systemd-journald
+
+# --- sysctl tweaks for SD-card longevity ------------------------------------
+echo ">> Applying sysctl tweaks"
+install -m 0644 "$INSTALL_DIR/deploy/sysctl-sms-printer.conf" \
+    /etc/sysctl.d/99-sms-printer.conf
+sysctl --system >/dev/null || true
+
 # --- Systemd units -----------------------------------------------------------
 echo ">> Installing systemd units"
 for unit in sms-printer.service sms-printer-ngrok.service sms-printer-webhook.service; do
@@ -83,10 +98,8 @@ echo
 echo "Next steps:"
 echo "  1. Make sure $INSTALL_DIR/.env has your Twilio + ngrok credentials."
 echo "  2. Plug in the thermal printer over USB. Verify with: lsusb"
-echo "     If the vendor/product differ from 0416:5011, update PRINTER_USB_VENDOR /"
-echo "     PRINTER_USB_PRODUCT in .env (or leave them blank to use /dev/usb/lp0)."
 echo "  3. Start everything now:"
 echo "       sudo systemctl start sms-printer.service sms-printer-ngrok.service sms-printer-webhook.service"
-echo "  4. Check logs with:"
+echo "  4. Tail logs with:"
 echo "       journalctl -u sms-printer.service -f"
 echo "  5. Reboot to confirm auto-start:  sudo reboot"

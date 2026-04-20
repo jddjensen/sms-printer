@@ -1,17 +1,35 @@
 # Raspberry Pi Deployment
 
 Target hardware: **Raspberry Pi 3 Model B** running **Raspberry Pi OS 64-bit**.
-The Pi auto-starts three systemd services on boot:
+Three systemd services start automatically at boot:
 
-| Service                      | What it does                                                            |
-| ---------------------------- | ----------------------------------------------------------------------- |
-| `sms-printer.service`        | The Flask app (`app.py`) — receives Twilio SMS and prints them.         |
-| `sms-printer-ngrok.service`  | Starts the ngrok HTTPS tunnel pointing at port 5000.                    |
-| `sms-printer-webhook.service` | Waits for ngrok, then updates the Twilio SMS webhook to the new URL.   |
+| Service                       | What it does                                                                      |
+| ----------------------------- | --------------------------------------------------------------------------------- |
+| `sms-printer.service`         | The Flask app — receives Twilio SMS and prints them. Eventlet WSGI, systemd watchdog, auto-restarts on any hang or crash. |
+| `sms-printer-ngrok.service`   | Starts the ngrok HTTPS tunnel pointing at port 5000. Respects `NGROK_DOMAIN` / `NGROK_REGION`. |
+| `sms-printer-webhook.service` | Waits for ngrok, then updates the Twilio SMS webhook to the new URL.              |
+
+## What makes the Pi install stable
+
+- **Production WSGI.** SocketIO runs under `eventlet`, not Flask's dev server.
+- **Systemd watchdog.** The app sends `WATCHDOG=1` to systemd only if
+  `GET /healthz` returns `200` from inside the process. If the Flask loop
+  wedges, systemd kills and restarts it within ~60 seconds.
+- **Aggressive auto-restart.** `Restart=always`, `RestartSec=3`,
+  `StartLimitBurst=20` on a 10 minute window — survives transient Wi-Fi or
+  USB blips.
+- **Atomic state writes.** `ig_state.json` is written via `tmp + rename` so a
+  mid-write power cut cannot corrupt it.
+- **Capped journald.** Logs are bounded (200 MB max, 30 day retention) so they
+  cannot fill the SD card.
+- **SD-card-friendly sysctl.** `vm.swappiness=10`, faster writeback — less wear,
+  less data lost on a hard power cut.
+- **`Requires=` chain.** ngrok requires the app; the webhook service requires
+  ngrok. Fix the root cause, everything downstream follows.
 
 ## 1. Prepare the SD card
 
-Flash **Raspberry Pi OS (64-bit)** using Raspberry Pi Imager. In the imager
+Flash **Raspberry Pi OS (64-bit)** with Raspberry Pi Imager. In imager
 settings, preconfigure:
 - hostname (e.g. `smsprinter`)
 - username + password
@@ -39,31 +57,24 @@ nano .env
 Fill in:
 - `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_PHONE_NUMBER`
 - `NGROK_AUTHTOKEN` — get one at https://dashboard.ngrok.com
+- (optional) `NGROK_DOMAIN` — a reserved domain (paid ngrok plan). **With a
+  reserved domain the Twilio webhook never has to be rewritten, so the
+  webhook service becomes a no-op after the first boot.**
 - (optional) `IG_USER_ID`, `IG_ACCESS_TOKEN` for the Instagram poller
 
 ## 4. Identify the printer
 
-Plug the thermal printer into a USB port and run:
+Plug the thermal printer in and run `lsusb`. You should see something like
+`ID 0416:5011 ...`.
 
-```bash
-lsusb
-```
+- **Easy path:** leave `PRINTER_USB_VENDOR` / `PRINTER_USB_PRODUCT` blank. The
+  app writes raw ESC/POS to `PRINTER_DEVICE` (default `/dev/usb/lp0`).
+- **pyusb path:** set `PRINTER_USB_VENDOR` and `PRINTER_USB_PRODUCT` from
+  `lsusb`. Use this if `/dev/usb/lp0` doesn't show up.
 
-You should see a line like `ID 0416:5011 ...`. There are two ways to use it:
-
-**Option A — character device (simplest).** Leave `PRINTER_USB_VENDOR` /
-`PRINTER_USB_PRODUCT` blank in `.env`. The app writes raw ESC/POS to
-`PRINTER_DEVICE` (default `/dev/usb/lp0`). This works on most POS-80 clones out
-of the box.
-
-**Option B — USB vendor/product ids.** Put the hex values from `lsusb` into
-`PRINTER_USB_VENDOR` and `PRINTER_USB_PRODUCT` in `.env`. The app talks to the
-printer via `python-escpos` + `pyusb` directly. Use this if `/dev/usb/lp0`
-doesn't appear (some printers need it).
-
-If your printer's vendor id is not in
-[`deploy/99-escpos-printer.rules`](99-escpos-printer.rules), add a line for it
-and re-run `sudo udevadm control --reload-rules && sudo udevadm trigger`.
+If your printer's vendor id is not already in
+[`99-escpos-printer.rules`](99-escpos-printer.rules), add a line and rerun
+`sudo udevadm control --reload-rules && sudo udevadm trigger`.
 
 ## 5. Run the installer
 
@@ -71,22 +82,14 @@ and re-run `sudo udevadm control --reload-rules && sudo udevadm trigger`.
 sudo bash deploy/install.sh
 ```
 
-This script:
-- installs apt packages (`python3-venv`, `libusb-1.0-0`, `usbutils`, …)
-- creates a Python virtualenv at `~/sms-printer/venv`
-- downloads the ARM64 ngrok binary to `/usr/local/bin/ngrok`
-- registers your `NGROK_AUTHTOKEN`
-- adds your user to the `lp` group so it can talk to the USB printer
-- installs the udev rules and three systemd units, and enables them on boot
-
-Reboot to verify auto-start:
+Then reboot:
 
 ```bash
 sudo reboot
 ```
 
-After the Pi comes back up, visit `http://<pi-hostname>.local:5000` on your
-LAN to see the dashboard, and send a test SMS to your Twilio number.
+Visit `http://<pi-hostname>.local:5000` from any device on the LAN to see the
+dashboard, and send a test SMS to your Twilio number.
 
 ## 6. Day-to-day operations
 
@@ -94,8 +97,11 @@ LAN to see the dashboard, and send a test SMS to your Twilio number.
 # Tail the app logs
 journalctl -u sms-printer.service -f
 
-# Check that all three services are up
+# Check everything is up
 systemctl status sms-printer.service sms-printer-ngrok.service sms-printer-webhook.service
+
+# Health probe (what systemd itself uses as the watchdog signal)
+curl http://localhost:5000/healthz
 
 # Restart after changing .env
 sudo systemctl restart sms-printer.service sms-printer-ngrok.service sms-printer-webhook.service
@@ -106,15 +112,17 @@ sudo bash deploy/uninstall.sh
 
 ## Troubleshooting
 
-- **`/dev/usb/lp0` missing** → switch to Option B (vendor/product ids), or
-  `sudo modprobe usblp`. If the kernel is refusing to bind it because ESC/POS
-  tools grabbed it, removing `usblp` is expected when using pyusb directly.
+- **Service keeps restarting** → `journalctl -u sms-printer.service -n 200`.
+  The watchdog only fires if `/healthz` fails — check what's unhealthy.
+- **`/dev/usb/lp0` missing** → switch to pyusb path (vendor + product ids), or
+  `sudo modprobe usblp`. Some printers need one or the other; try both.
 - **`permission denied` on the printer** → confirm your user is in the `lp`
-  group (`groups`) and that the udev rule matches `lsusb` output. Re-login
-  after `usermod -aG lp`.
-- **Twilio webhook 502s after a reboot** → `sms-printer-webhook.service`
-  re-registers the ngrok URL on each boot, but ngrok free URLs change every
-  restart. Check `systemctl status sms-printer-webhook.service` to confirm it
-  ran successfully. A paid ngrok plan with a reserved domain avoids this.
-- **Instagram poller silent** → `IG_USER_ID` / `IG_ACCESS_TOKEN` not set.
-  Check `journalctl -u sms-printer.service | grep IG`.
+  group (`groups`) and re-login after `usermod -aG lp`. The udev rule must
+  match `lsusb` output.
+- **Twilio webhook 502s after reboot** → without a reserved domain, ngrok
+  gives a new URL every boot. `sms-printer-webhook.service` waits up to
+  ~3 minutes for ngrok then updates Twilio. Check
+  `systemctl status sms-printer-webhook.service`. Setting `NGROK_DOMAIN`
+  eliminates this entire class of problem.
+- **Instagram poller silent** → `journalctl -u sms-printer.service | grep IG`
+  will tell you whether the tokens are set.

@@ -1,6 +1,23 @@
-import json
 import os
 import sys
+
+IS_WINDOWS = sys.platform == "win32"
+
+# eventlet must monkey-patch before *anything* that uses sockets/ssl is imported.
+# On Windows we keep threading mode for simplicity.
+if not IS_WINDOWS:
+    try:
+        import eventlet  # type: ignore
+
+        eventlet.monkey_patch()
+        _ASYNC_MODE = "eventlet"
+    except ImportError:
+        _ASYNC_MODE = "threading"
+else:
+    _ASYNC_MODE = "threading"
+
+import json
+import socket
 import threading
 import time
 from datetime import datetime
@@ -11,13 +28,11 @@ from flask import Flask, jsonify, render_template, request
 from flask_socketio import SocketIO, emit
 from twilio.twiml.messaging_response import MessagingResponse
 
-IS_WINDOWS = sys.platform == "win32"
-
 if IS_WINDOWS:
     import win32print
 
 app = Flask(__name__)
-socketio = SocketIO(app, async_mode="threading")
+socketio = SocketIO(app, async_mode=_ASYNC_MODE, cors_allowed_origins="*")
 
 PRINTER_NAME = os.environ.get("PRINTER_NAME", "POS-80")
 PRINTER_DEVICE = os.environ.get("PRINTER_DEVICE", "/dev/usb/lp0")
@@ -28,11 +43,30 @@ printing_enabled = True
 # ── Instagram polling config ─────────────────────────────────────────────
 IG_USER_ID = os.environ.get("IG_USER_ID", "").strip()
 IG_ACCESS_TOKEN = os.environ.get("IG_ACCESS_TOKEN", "").strip()
-IG_POLL_INTERVAL = int(os.environ.get("IG_POLL_INTERVAL", "300"))  # seconds
+IG_POLL_INTERVAL = int(os.environ.get("IG_POLL_INTERVAL", "300"))
 IG_GRAPH_VERSION = os.environ.get("IG_GRAPH_VERSION", "v21.0")
 STATE_FILE = Path(__file__).with_name("ig_state.json")
 
 
+# ── systemd notify (no external deps) ────────────────────────────────────
+def sd_notify(state: str) -> None:
+    addr = os.environ.get("NOTIFY_SOCKET")
+    if not addr:
+        return
+    if addr.startswith("@"):
+        addr = "\0" + addr[1:]
+    try:
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
+        try:
+            sock.connect(addr)
+            sock.sendall(state.encode())
+        finally:
+            sock.close()
+    except OSError:
+        pass
+
+
+# ── Printer drivers ──────────────────────────────────────────────────────
 def _raw_print_windows(job_name: str, payload: bytes) -> None:
     hprinter = win32print.OpenPrinter(PRINTER_NAME)
     try:
@@ -103,7 +137,7 @@ def print_follower_update(username: str, count: int, delta: int) -> None:
     _raw_print("IG-Followers", "".join(lines).encode("utf-8") + cut)
 
 
-# ── State helpers ────────────────────────────────────────────────────────
+# ── State helpers (atomic write so a mid-write power cut can't corrupt) ──
 def load_state() -> dict:
     if STATE_FILE.exists():
         try:
@@ -114,7 +148,9 @@ def load_state() -> dict:
 
 
 def save_state(state: dict) -> None:
-    STATE_FILE.write_text(json.dumps(state, indent=2))
+    tmp = STATE_FILE.with_suffix(STATE_FILE.suffix + ".tmp")
+    tmp.write_text(json.dumps(state, indent=2))
+    os.replace(tmp, STATE_FILE)
 
 
 # ── Instagram poller ─────────────────────────────────────────────────────
@@ -149,7 +185,6 @@ def ig_poller():
                 if count is None:
                     print(f"[IG] No followers_count in response: {snap}", flush=True)
                 elif last_count is None:
-                    # First observation — don't print, just record baseline.
                     print(f"[IG] Baseline set: @{username} = {count}", flush=True)
                     last_count = count
                     save_state({"username": username, "followers_count": count})
@@ -196,6 +231,11 @@ def on_set_printing(data):
 @app.route("/")
 def dashboard():
     return render_template("index.html")
+
+
+@app.route("/healthz")
+def healthz():
+    return jsonify({"ok": True, "printing_enabled": printing_enabled, "async_mode": _ASYNC_MODE})
 
 
 @app.route("/shutdown", methods=["POST"])
@@ -256,7 +296,27 @@ def sms_webhook():
     return str(MessagingResponse())
 
 
+# ── Watchdog: self-check + sd_notify WATCHDOG=1 every ~15s ───────────────
+def _self_check() -> bool:
+    try:
+        r = requests.get("http://127.0.0.1:5000/healthz", timeout=5)
+        return r.status_code == 200 and r.json().get("ok") is True
+    except Exception:
+        return False
+
+
+def _watchdog_loop():
+    time.sleep(5)
+    sd_notify("READY=1")
+    sd_notify("STATUS=SMS Printer online")
+    while True:
+        if _self_check():
+            sd_notify("WATCHDOG=1")
+        time.sleep(15)
+
+
 if __name__ == "__main__":
-    print("SMS/IG Printer running on http://localhost:5000", flush=True)
+    print(f"SMS/IG Printer running on http://0.0.0.0:5000 (async={_ASYNC_MODE})", flush=True)
     threading.Thread(target=ig_poller, daemon=True).start()
+    threading.Thread(target=_watchdog_loop, daemon=True).start()
     socketio.run(app, host="0.0.0.0", port=5000)

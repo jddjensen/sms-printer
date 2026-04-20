@@ -9,11 +9,15 @@ Type=simple
 User=__USER__
 Group=__USER__
 WorkingDirectory=__INSTALL_DIR__
-ExecStart=/usr/local/bin/ngrok http 5000 --log=stdout
-Restart=on-failure
+EnvironmentFile=__INSTALL_DIR__/.env
+ExecStart=__INSTALL_DIR__/deploy/ngrok-run.sh
+Restart=always
 RestartSec=10
+StartLimitIntervalSec=600
+StartLimitBurst=20
 StandardOutput=journal
 StandardError=journal
+SyslogIdentifier=sms-printer-ngrok
 
 [Install]
 WantedBy=multi-user.target
