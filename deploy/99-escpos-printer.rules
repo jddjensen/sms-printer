@@ -1,0 +1,8 @@
+# Give the "lp" group access to common USB thermal-printer chipsets.
+# Add more idVendor / idProduct pairs as needed. Find yours with `lsusb`.
+# 0416:5011 — Winbond / generic POS-80 clones
+SUBSYSTEM=="usb", ATTRS{idVendor}=="0416", ATTRS{idProduct}=="5011", MODE="0664", GROUP="lp"
+# 0fe6:811e — ICS Advent / generic 58mm
+SUBSYSTEM=="usb", ATTRS{idVendor}=="0fe6", ATTRS{idProduct}=="811e", MODE="0664", GROUP="lp"
+# 04b8:0202 — Epson TM series
+SUBSYSTEM=="usb", ATTRS{idVendor}=="04b8", MODE="0664", GROUP="lp"

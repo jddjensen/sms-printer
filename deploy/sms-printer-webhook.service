@@ -1,0 +1,17 @@
+[Unit]
+Description=Update Twilio SMS webhook with current ngrok URL
+After=sms-printer-ngrok.service
+Requires=sms-printer-ngrok.service
+
+[Service]
+Type=oneshot
+User=__USER__
+Group=__USER__
+WorkingDirectory=__INSTALL_DIR__
+EnvironmentFile=__INSTALL_DIR__/.env
+ExecStartPre=/bin/sleep 8
+ExecStart=__INSTALL_DIR__/venv/bin/python __INSTALL_DIR__/setup_webhook.py
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

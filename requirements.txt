@@ -2,5 +2,6 @@ flask
 flask-socketio
 twilio
 python-escpos
-pywin32
 requests
+pywin32; sys_platform == "win32"
+pyusb; sys_platform != "win32"

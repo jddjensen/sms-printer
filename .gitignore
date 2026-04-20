@@ -2,3 +2,5 @@ ngrok.exe
 __pycache__/
 *.pyc
 .env
+bin/
+obj/

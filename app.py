@@ -1,20 +1,28 @@
 import json
 import os
+import sys
 import threading
 import time
 from datetime import datetime
 from pathlib import Path
 
 import requests
-import win32print
 from flask import Flask, jsonify, render_template, request
 from flask_socketio import SocketIO, emit
 from twilio.twiml.messaging_response import MessagingResponse
 
+IS_WINDOWS = sys.platform == "win32"
+
+if IS_WINDOWS:
+    import win32print
+
 app = Flask(__name__)
 socketio = SocketIO(app, async_mode="threading")
 
-PRINTER_NAME = "POS-80"
+PRINTER_NAME = os.environ.get("PRINTER_NAME", "POS-80")
+PRINTER_DEVICE = os.environ.get("PRINTER_DEVICE", "/dev/usb/lp0")
+PRINTER_USB_VENDOR = os.environ.get("PRINTER_USB_VENDOR", "").strip()
+PRINTER_USB_PRODUCT = os.environ.get("PRINTER_USB_PRODUCT", "").strip()
 printing_enabled = True
 
 # ── Instagram polling config ─────────────────────────────────────────────
@@ -25,7 +33,7 @@ IG_GRAPH_VERSION = os.environ.get("IG_GRAPH_VERSION", "v21.0")
 STATE_FILE = Path(__file__).with_name("ig_state.json")
 
 
-def _raw_print(job_name: str, payload: bytes) -> None:
+def _raw_print_windows(job_name: str, payload: bytes) -> None:
     hprinter = win32print.OpenPrinter(PRINTER_NAME)
     try:
         win32print.StartDocPrinter(hprinter, 1, (job_name, None, "RAW"))
@@ -35,6 +43,28 @@ def _raw_print(job_name: str, payload: bytes) -> None:
         win32print.EndDocPrinter(hprinter)
     finally:
         win32print.ClosePrinter(hprinter)
+
+
+def _raw_print_linux(job_name: str, payload: bytes) -> None:
+    if PRINTER_USB_VENDOR and PRINTER_USB_PRODUCT:
+        from escpos.printer import Usb
+
+        p = Usb(int(PRINTER_USB_VENDOR, 16), int(PRINTER_USB_PRODUCT, 16))
+        try:
+            p._raw(payload)
+        finally:
+            p.close()
+        return
+
+    with open(PRINTER_DEVICE, "wb") as f:
+        f.write(payload)
+
+
+def _raw_print(job_name: str, payload: bytes) -> None:
+    if IS_WINDOWS:
+        _raw_print_windows(job_name, payload)
+    else:
+        _raw_print_linux(job_name, payload)
 
 
 def print_sms(from_number, body):

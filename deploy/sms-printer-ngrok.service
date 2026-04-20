@@ -1,0 +1,19 @@
+[Unit]
+Description=ngrok tunnel for SMS Printer
+After=network-online.target sms-printer.service
+Wants=network-online.target
+Requires=sms-printer.service
+
+[Service]
+Type=simple
+User=__USER__
+Group=__USER__
+WorkingDirectory=__INSTALL_DIR__
+ExecStart=/usr/local/bin/ngrok http 5000 --log=stdout
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
